@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Operator Timer</title>
+
+  <link rel="manifest" href="./manifest.webmanifest">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Timer">
+
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 0; padding: 16px; background: #f6f7f9; color: #111; }
+    .card { max-width: 1240px; margin: 0 auto; background: #fff; border-radius: 14px; padding: 16px; box-shadow: 0 6px 18px rgba(0,0,0,.08); }
+    h1 { font-size: 18px; margin: 0 0 12px; }
+    h2 { font-size: 14px; margin: 16px 0 8px; color: #222; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    label { font-size: 13px; color: #333; min-width: 88px; }
+    select, button, input[type="text"] {
+      font-size: 14px; padding: 10px 12px; border-radius: 10px;
+      border: 1px solid #d7dbe0; background: #fff;
+    }
+    input[type="text"] { flex: 1; min-width: 220px; }
+    .small { min-width: 160px; flex: 0 1 220px; }
+    button { cursor: pointer; border: 0; }
+    button.primary { background: #2563eb; color: #fff; }
+    button.danger { background: #ef4444; color: #fff; }
+    button.secondary { background: #e5e7eb; color: #111; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .timer { font-variant-numeric: tabular-nums; font-size: 48px; letter-spacing: 1px; margin: 14px 0; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #eef1f4; font-size: 14px; vertical-align: top; }
+    th { font-size: 12px; color: #555; text-transform: uppercase; letter-spacing: .04em; }
+    .muted { color: #666; font-size: 13px; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #f1f5f9; font-size: 12px; }
+    .notes-cell { max-width: 260px; white-space: pre-wrap; word-break: break-word; }
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+    .summary-card { border: 1px solid #eef1f4; border-radius: 12px; padding: 12px; background: #fafbfc; }
+    .summary-title { font-weight: 600; margin-bottom: 6px; }
+    .summary-metric { font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Operator Timer</h1>
+
+    <div class="row" style="justify-content: space-between;">
+      <div class="row">
+        <label for="operator">Operator</label>
+        <select id="operator"></select>
+        <span class="pill" id="status">Ready</span>
+      </div>
+
+      <div class="actions">
+        <button class="secondary" id="exportBtn">Export CSV</button>
+        <button class="secondary" id="clearBtn">Clear All</button>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top: 10px;">
+      <label for="newOp">Add op</label>
+      <input id="newOp" class="small" type="text" placeholder="Operator name or number" />
+      <button class="secondary" id="addOpBtn" type="button">Add Operator</button>
+      <button class="secondary" id="clearOpsBtn" type="button">Clear Operators</button>
+      <span class="muted" id="opCountHint"></span>
+    </div>
+
+    <div class="row" style="margin-top: 8px;">
+      <label for="runNotes">Run notes</label>
+      <input id="runNotes" type="text" placeholder="Saved with this run only (clears after record)..." />
+      <span class="muted">Saved into the row when you hit Stop + Record.</span>
+    </div>
+
+    <div class="row">
+      <label for="stickyNotes">Sticky notes</label>
+      <input id="stickyNotes" type="text" placeholder="Stays until Export CSV (then clears)..." />
+      <button class="secondary" id="clearStickyBtn" type="button">Clear</button>
+      <span class="muted">Exported with every row.</span>
+    </div>
+
+    <div class="timer" id="display">0.0</div>
+
+    <div class="row">
+      <button class="primary" id="startBtn">Start</button>
+      <button class="danger" id="stopBtn" disabled>Stop + Record</button>
+      <button class="secondary" id="resetBtn" disabled>Reset</button>
+      <span class="muted">PPH = 3600 / time(s).</span>
+    </div>
+
+    <h2>Operator Averages (only operators with data)</h2>
+    <div class="summary-grid" id="summaryGrid"></div>
+
+    <table aria-label="records">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Operator</th>
+          <th>Time (s)</th>
+          <th>PPH</th>
+          <th>Run notes</th>
+          <th>Timestamp</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="7" class="muted">No records yet.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+<script>
+(() => {
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    });
+  }
+
+  const operatorEl = document.getElementById('operator');
+  const newOpEl = document.getElementById('newOp');
+  const addOpBtn = document.getElementById('addOpBtn');
+  const clearOpsBtn = document.getElementById('clearOpsBtn');
+  const opCountHint = document.getElementById('opCountHint');
+
+  const runNotesEl = document.getElementById('runNotes');
+  const stickyNotesEl = document.getElementById('stickyNotes');
+  const clearStickyBtn = document.getElementById('clearStickyBtn');
+
+  const displayEl = document.getElementById('display');
+  const statusEl = document.getElementById('status');
+
+  const startBtn = document.getElementById('startBtn');
+  const stopBtn  = document.getElementById('stopBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const exportBtn = document.getElementById('exportBtn');
+
+  const tbody = document.getElementById('tbody');
+  const summaryGrid = document.getElementById('summaryGrid');
+
+  let running = false;
+  let startPerf = 0;
+  let intervalId = null;
+  let lastShownTenths = -1;
+
+  const MAX_OPS = 100;
+
+  const STORAGE_RECORDS = 'operator_timer_records_v6';
+  const STORAGE_OPS = 'operator_timer_ops_v2';
+  const STICKY_KEY = 'operator_timer_sticky_notes_v2';
+
+  let records = loadArray(STORAGE_RECORDS);
+  let operators = loadArray(STORAGE_OPS);
+
+  function loadArray(key) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  function saveArray(key, val) {
+    localStorage.setItem(key, JSON.stringify(val));
+  }
+
+  function normalizeOpName(name) {
+    return String(name || '').trim().replace(/\s+/g, ' ');
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+  }
+  function setStatus(text) {
+    statusEl.textContent = text;
+  }
+  function nowSeconds() {
+    return (performance.now() - startPerf) / 1000;
+  }
+  function calcPPH(timeSec) {
+    if (!Number.isFinite(timeSec) || timeSec <= 0) return 0;
+    return 3600 / timeSec;
+  }
+
+  function loadSticky() {
+    try { return localStorage.getItem(STICKY_KEY) || ''; } catch { return ''; }
+  }
+  function saveSticky(val) {
+    try { localStorage.setItem(STICKY_KEY, val); } catch {}
+  }
+  function clearSticky() {
+    stickyNotesEl.value = '';
+    saveSticky('');
+  }
+
+  function uniqueOpsFromRecords() {
+    const set = new Set();
+    for (const r of records) {
+      const op = normalizeOpName(r.op);
+      if (op) set.add(op);
+    }
+    return Array.from(set);
+  }
+
+  function rebuildOperatorList(keepSelection = true) {
+    const current = operatorEl.value;
+
+    const set = new Set();
+
+    // Saved operators only
+    for (const op of operators) {
+      const n = normalizeOpName(op);
+      if (n) set.add(n);
+    }
+
+    // Plus operators referenced in existing records (so old data is still selectable)
+    for (const op of uniqueOpsFromRecords()) {
+      if (op) set.add(op);
+    }
+
+    const list = Array.from(set).slice(0, MAX_OPS);
+
+    operators = list;
+    saveArray(STORAGE_OPS, operators);
+
+    operatorEl.innerHTML = operators.length
+      ? operators.map(op => `<option value="${escapeHtml(op)}">${escapeHtml(op)}</option>`).join('')
+      : `<option value="" disabled selected>No operators added</option>`;
+
+    if (keepSelection && current && operators.includes(current)) {
+      operatorEl.value = current;
+    }
+
+    opCountHint.textContent = `Operators: ${operators.length} / ${MAX_OPS}`;
+  }
+
+  function addOperator() {
+    const name = normalizeOpName(newOpEl.value);
+    if (!name) return;
+
+    const lower = name.toLowerCase();
+    const existing = operators.find(o => String(o).toLowerCase() === lower);
+    if (existing) {
+      operatorEl.value = existing;
+      newOpEl.value = '';
+      return;
+    }
+
+    if (operators.length >= MAX_OPS) {
+      alert(`Operator limit reached (${MAX_OPS}).`);
+      return;
+    }
+
+    operators.push(name);
+    saveArray(STORAGE_OPS, operators);
+    rebuildOperatorList(true);
+    operatorEl.value = name;
+    newOpEl.value = '';
+  }
+
+  function clearOperators() {
+    if (running) return;
+
+    const choice = confirm(
+      'Clear operator list?\n\nOK = Clear operators AND records (dropdown becomes empty)\nCancel = Clear operators only (operators in existing records may still appear)'
+    );
+
+    if (choice) {
+      // Clear both operators and records so dropdown truly empties
+      records = [];
+      saveArray(STORAGE_RECORDS, records);
+
+      operators = [];
+      saveArray(STORAGE_OPS, operators);
+
+      renderTable();
+      renderSummary();
+      rebuildOperatorList(false);
+      return;
+    }
+
+    // Clear operators only (records remain, so operators from records can reappear)
+    if (!confirm('Clear saved operator list only?')) return;
+
+    operators = [];
+    saveArray(STORAGE_OPS, operators);
+    rebuildOperatorList(false);
+  }
+
+  function renderTable() {
+    if (records.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="7" class="muted">No records yet.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = records.map((r, idx) => {
+      const ts = new Date(r.iso);
+      const nice = ts.toLocaleString();
+      return `
+        <tr>
+          <td>${idx + 1}</td>
+          <td>${escapeHtml(r.op)}</td>
+          <td>${Number(r.timeSec).toFixed(1)}</td>
+          <td>${Number(r.pph).toFixed(1)}</td>
+          <td class="notes-cell">${escapeHtml(r.runNotes || '')}</td>
+          <td>${escapeHtml(nice)}</td>
+          <td><button class="secondary" data-del="${r.id}">Delete</button></td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  function computeOperatorStatsOnlyForSeenOps() {
+    const stats = new Map();
+    for (const r of records) {
+      const op = normalizeOpName(r.op);
+      const t = Number(r.timeSec);
+      const p = Number(r.pph);
+      if (!op || !Number.isFinite(t) || t <= 0) continue;
+
+      if (!stats.has(op)) stats.set(op, { count: 0, sumTime: 0, sumPPH: 0 });
+      const s = stats.get(op);
+      s.count += 1;
+      s.sumTime += t;
+      s.sumPPH += (Number.isFinite(p) && p > 0) ? p : calcPPH(t);
+    }
+    return Array.from(stats.entries()).sort((a,b) => a[0].localeCompare(b[0]));
+  }
+
+  function renderSummary() {
+    const entries = computeOperatorStatsOnlyForSeenOps();
+
+    if (entries.length === 0) {
+      summaryGrid.innerHTML = `<div class="muted">No records yet.</div>`;
+      return;
+    }
+
+    summaryGrid.innerHTML = entries.map(([op, s]) => {
+      const avgTime = s.sumTime / s.count;
+      const avgPPH = s.sumPPH / s.count;
+      return `
+        <div class="summary-card">
+          <div class="summary-title">${escapeHtml(op)}</div>
+          <div class="summary-metric">Records: ${s.count}</div>
+          <div class="summary-metric">Avg time: ${avgTime.toFixed(1)} s</div>
+          <div class="summary-metric">Avg PPH: ${avgPPH.toFixed(1)}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function saveRecords() {
+    saveArray(STORAGE_RECORDS, records);
+  }
+
+  function start() {
+    if (!operatorEl.value) {
+      alert('Please add and select an operator before starting.');
+      return;
+    }
+    if (running) return;
+
+    running = true;
+    startPerf = performance.now();
+    lastShownTenths = -1;
+
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    resetBtn.disabled = true;
+
+    operatorEl.disabled = true;
+    newOpEl.disabled = true;
+    addOpBtn.disabled = true;
+    clearOpsBtn.disabled = true;
+
+    runNotesEl.disabled = true;
+    stickyNotesEl.disabled = true;
+    clearStickyBtn.disabled = true;
+
+    setStatus('Running');
+
+    intervalId = setInterval(() => {
+      const s = nowSeconds();
+      const tenths = Math.floor(s * 10);
+      if (tenths !== lastShownTenths) {
+        lastShownTenths = tenths;
+        displayEl.textContent = (Math.round(s * 10) / 10).toFixed(1);
+      }
+    }, 25);
+  }
+
+  function stopAndRecord() {
+    if (!running) return;
+
+    const s = nowSeconds();
+    const timeSec = Math.round(s * 10) / 10;
+    const pph = calcPPH(timeSec);
+
+    running = false;
+    clearInterval(intervalId);
+    intervalId = null;
+
+    displayEl.textContent = timeSec.toFixed(1);
+    setStatus('Stopped');
+
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    resetBtn.disabled = false;
+
+    operatorEl.disabled = false;
+    newOpEl.disabled = false;
+    addOpBtn.disabled = false;
+    clearOpsBtn.disabled = false;
+
+    runNotesEl.disabled = false;
+    stickyNotesEl.disabled = false;
+    clearStickyBtn.disabled = false;
+
+    const op = normalizeOpName(operatorEl.value);
+    const runNotes = (runNotesEl.value || '').trim();
+
+    records.unshift({
+      id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2)),
+      op,
+      timeSec,
+      pph,
+      runNotes,
+      iso: new Date().toISOString()
+    });
+
+    runNotesEl.value = '';
+
+    saveRecords();
+    rebuildOperatorList(true);
+    renderTable();
+    renderSummary();
+  }
+
+  function reset() {
+    if (running) return;
+    displayEl.textContent = '0.0';
+    setStatus('Ready');
+    resetBtn.disabled = true;
+  }
+
+  // Clear All clears records only, keeps operators
+  function clearAll() {
+    if (!confirm('Clear all records? (Operators will be kept)')) return;
+
+    records = [];
+    saveRecords();
+
+    renderTable();
+    renderSummary();
+  }
+
+  function exportCSV() {
+    const sticky = (stickyNotesEl.value || '').trim();
+
+    const header = ['Index','Operator','TimeSeconds','PPH','RunNotes','StickyNotes','TimestampISO'];
+    const rows = records.slice().reverse().map((r, i) => [
+      i + 1,
+      r.op,
+      Number(r.timeSec).toFixed(1),
+      Number(r.pph).toFixed(1),
+      r.runNotes || '',
+      sticky,
+      r.iso
+    ]);
+
+    const csv = [header, ...rows]
+      .map(cols => cols.map(c => `"${String(c).replace(/"/g,'""')}"`).join(','))
+      .join('\n');
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'operator_times.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+
+    clearSticky();
+  }
+
+  addOpBtn.addEventListener('click', addOperator);
+  newOpEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') addOperator();
+  });
+
+  clearOpsBtn.addEventListener('click', clearOperators);
+
+  stickyNotesEl.addEventListener('input', () => saveSticky(stickyNotesEl.value));
+  clearStickyBtn.addEventListener('click', () => {
+    if (!confirm('Clear sticky notes?')) return;
+    clearSticky();
+  });
+
+  tbody.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-del]');
+    if (!btn) return;
+    const id = btn.getAttribute('data-del');
+    records = records.filter(r => r.id !== id);
+    saveRecords();
+    rebuildOperatorList(true);
+    renderTable();
+    renderSummary();
+  });
+
+  startBtn.addEventListener('click', start);
+  stopBtn.addEventListener('click', stopAndRecord);
+  resetBtn.addEventListener('click', reset);
+  clearBtn.addEventListener('click', clearAll);
+  exportBtn.addEventListener('click', exportCSV);
+
+  stickyNotesEl.value = loadSticky();
+  rebuildOperatorList(false);
+  renderTable();
+  renderSummary();
+})();
+</script>
+</body>
+</html>
